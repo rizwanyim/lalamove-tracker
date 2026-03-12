@@ -11,7 +11,7 @@ import {
   Plus, Trash2, Wallet, Target, Calendar, 
   Truck, Settings, Edit2, Check, Hash, 
   X, Save, ChevronRight, Cloud, BarChart3, CreditCard,
-  ChevronLeft, Activity, Download, Zap, MapPin, Info, Wand2, TrendingUp, Sparkles, Sun, Moon, AlertCircle
+  ChevronLeft, Activity, Download, Zap, MapPin, Info, Wand2, TrendingUp, Sparkles, Sun, Moon, AlertCircle, Wrench
 } from 'lucide-react';
 
 // Konfigurasi Firebase
@@ -30,7 +30,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Rule 1: Membersihkan ID untuk keselamatan segmen path
 const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'lalamove-elite-v6';
 const appId = rawAppId.replace(/\//g, '_'); 
 
@@ -50,6 +49,9 @@ const App = () => {
   const [isEditingJobTarget, setIsEditingJobTarget] = useState(false);
   const [tempJobTarget, setTempJobTarget] = useState(100);
 
+  // State untuk Peringatan Servis
+  const [lastServiceMileage, setLastServiceMileage] = useState(Number(localStorage.getItem('last_service_km')) || 0);
+
   const [amount, setAmount] = useState('');
   const [jobsInput, setJobsInput] = useState('');
   const [spendingInput, setSpendingInput] = useState('');
@@ -64,7 +66,6 @@ const App = () => {
   const dailyGoalWithMaint = dailyBase + 10;
   const todayStr = new Date().toLocaleDateString('en-CA');
 
-  // Kira anggaran KM (RM0.50/KM lepas 5KM pertama)
   const calculateEstimatedKm = (netTotal) => {
     const net = parseFloat(netTotal);
     const jobs = parseInt(jobsInput) || 1;
@@ -77,11 +78,10 @@ const App = () => {
 
   const estimatedKmValue = useMemo(() => calculateEstimatedKm(amount), [amount, jobsInput]);
 
-  // FIX: Pengesahan dengan Error Handling & Timeout (Rule 3)
   useEffect(() => {
     let timeoutId = setTimeout(() => {
       if (loading) setAuthError("Sambungan perlahan. Sila segar semula (Refresh).");
-    }, 10000); // 10 saat timeout
+    }, 10000);
 
     const initAuth = async () => {
       try {
@@ -114,25 +114,16 @@ const App = () => {
     };
   }, []);
 
-  // Ambil Data dengan safety check (Rule 1)
   useEffect(() => {
     if (!user) return;
-    
     const q = collection(db, 'artifacts', appId, 'users', user.uid, 'earnings');
-    
-    const unsubscribe = onSnapshot(q, 
-      (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setEarnings(data.sort((a, b) => new Date(b.date) - new Date(a.date)));
         setLoading(false);
         setAuthError(null);
-      }, 
-      (error) => { 
-        console.error("Firestore error:", error); 
+      }, (error) => { 
         setLoading(false);
-        if (error.code === 'permission-denied') {
-          setAuthError("Ralat Kebenaran (Permission Denied).");
-        }
       }
     );
     return () => unsubscribe();
@@ -184,23 +175,34 @@ const App = () => {
       return {
         label: d.toLocaleDateString('ms-MY', { weekday: 'short' }),
         value: fullDailyMap[ds]?.net || 0,
-        fullDate: ds
       };
     });
 
-    const todayNetVal = fullDailyMap[todayStr]?.net || 0;
-    const todayMaintVal = todayNetVal > 0 ? 10 : 0;
+    // Kira Total Jarak Keseluruhan (Lifetime) untuk servis
+    const lifetimeMileage = earnings.reduce((sum, entry) => sum + (Number(entry.mileage) || 0), 0);
+    const mileageSinceLastService = lifetimeMileage - lastServiceMileage;
 
     return { 
       filtered: monthlyEntries, profit, maintenance, jobs: jobsTotal, spending: spendingTotal, mileage: mileageTotal,
       chart: chartData,
-      todayNet: todayNetVal, todayMaint: todayMaintVal,
+      todayNet: fullDailyMap[todayStr]?.net || 0,
+      todayMaint: (fullDailyMap[todayStr]?.net || 0) > 0 ? 10 : 0,
       costPerKm: mileageTotal > 0 ? (spendingTotal / mileageTotal) : 0,
-      todayMileage: fullDailyMap[todayStr]?.mileage || 0
+      todayMileage: fullDailyMap[todayStr]?.mileage || 0,
+      lifetimeMileage,
+      mileageSinceLastService
     };
-  }, [earnings, viewDate, todayStr, dailyGoalWithMaint]);
+  }, [earnings, viewDate, todayStr, dailyGoalWithMaint, lastServiceMileage]);
 
   const progressPercent = Math.min((stats.profit / target) * 100, 100);
+
+  const resetService = () => {
+    if (confirm("Adakah anda sudah menukar minyak hitam? Meter servis akan diset semula.")) {
+      const currentKm = stats.lifetimeMileage;
+      localStorage.setItem('last_service_km', currentKm.toString());
+      setLastServiceMileage(currentKm);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -248,7 +250,7 @@ const App = () => {
       ) : (
         <>
           <div className="w-16 h-16 border-4 border-orange-500/10 border-t-orange-500 rounded-full animate-spin mb-4"></div>
-          <p className="text-orange-500 font-bold uppercase tracking-[0.3em] animate-pulse text-[10px]">Elite Portal Connecting...</p>
+          <p className="text-orange-500 font-bold uppercase tracking-[0.3em] animate-pulse text-[10px]">Lala Tracker Connecting...</p>
         </>
       )}
     </div>
@@ -259,7 +261,7 @@ const App = () => {
       
       <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
 
-      {/* Header compact & sleek */}
+      {/* Header Sleek */}
       <header className={`pt-6 pb-14 px-6 rounded-b-[3.5rem] shadow-2xl relative overflow-hidden transition-all duration-500 ${isDarkMode ? 'bg-gradient-to-br from-orange-600 via-orange-700 to-red-800 text-white' : 'bg-gradient-to-br from-orange-500 to-orange-400 text-white'}`}>
         <div className="absolute top-0 right-0 w-80 h-80 bg-white/5 rounded-full -mr-32 -mt-32 blur-[80px]"></div>
         <div className="max-w-md mx-auto relative z-10">
@@ -269,7 +271,7 @@ const App = () => {
                 <Truck className="w-5 h-5" />
               </div>
               <div className="text-left leading-none">
-                <h1 className="text-sm font-black tracking-tighter italic uppercase">Elite Portal</h1>
+                <h1 className="text-sm font-black tracking-tight italic uppercase">Lala Tracker</h1>
                 <span className="text-[7px] font-bold opacity-70 uppercase tracking-widest leading-none">Wan SK Edition</span>
               </div>
             </div>
@@ -283,14 +285,15 @@ const App = () => {
 
           <div className="flex items-center justify-between mb-8 bg-black/20 rounded-2xl p-1.5 border border-white/10 backdrop-blur-xl">
             <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1))} className="p-2 hover:bg-white/10 rounded-lg"><ChevronLeft className="w-4 h-4" /></button>
-            <p className="text-[10px] font-black uppercase tracking-widest">{viewDate.toLocaleString('ms-MY', { month: 'long', year: 'numeric' })}</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest">{viewDate.toLocaleString('ms-MY', { month: 'long', year: 'numeric' })}</p>
             <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1))} className="p-2 hover:bg-white/10 rounded-lg"><ChevronRight className="w-4 h-4" /></button>
           </div>
 
           <div className="text-center">
-            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-1 opacity-60">Gaji Bersih (Pocket)</p>
-            <h2 className="text-6xl font-black mb-4 drop-shadow-2xl tracking-tighter text-center">
-              <span className="text-xl align-top mr-1 opacity-50 font-normal">RM</span>{stats.profit.toFixed(0)}
+            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-2 opacity-60">GAJI BERSIH</p>
+            <h2 className="text-6xl font-black mb-4 drop-shadow-2xl tracking-tighter text-center flex items-center justify-center">
+              <span className="text-xl font-light opacity-40 mr-3 mt-1">RM</span>
+              <span>{stats.profit.toFixed(0)}</span>
             </h2>
             <div className="flex justify-center gap-2">
                 <div className="bg-black/20 px-3 py-1.5 rounded-xl text-[9px] font-bold border border-white/5 backdrop-blur-md flex items-center gap-1.5 uppercase tracking-wider">
@@ -312,12 +315,12 @@ const App = () => {
             {!showForm ? (
               <button onClick={() => setShowForm(true)} className="w-full bg-gradient-to-r from-orange-600 to-red-600 text-white py-4 rounded-2xl font-black shadow-2xl flex items-center justify-center gap-3 transition-all active:scale-95 mb-6 border-t border-white/10">
                 <div className="bg-white/20 p-1.5 rounded-xl"><Plus className="w-4 h-4" /></div>
-                <span className="uppercase tracking-[0.2em] text-xs">Log Elite Harian</span>
+                <span className="uppercase tracking-[0.2em] text-xs">Log Gaji Harian</span>
               </button>
             ) : (
               <div className={`p-5 rounded-[2.5rem] shadow-2xl mb-6 border transition-colors ${isDarkMode ? 'bg-slate-900 border-orange-500/30' : 'bg-white border-orange-100'}`}>
                 <div className="flex justify-between items-center mb-5">
-                  <h3 className={`font-black flex items-center gap-2 uppercase text-[10px] tracking-[0.2em] ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Borang Log Elite</h3>
+                  <h3 className={`font-black flex items-center gap-2 uppercase text-[10px] tracking-[0.2em] ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Borang Log</h3>
                   <button onClick={resetForm} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-gray-100 text-slate-500'}`}><X className="w-4 h-4" /></button>
                 </div>
                 <form onSubmit={handleSubmit} className="space-y-4">
@@ -325,12 +328,12 @@ const App = () => {
                     <label className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1 block">Net Wallet (Apps)</label>
                     <div className="relative">
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-slate-500 text-lg italic">RM</span>
-                      <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={`w-full pl-14 p-4 rounded-2xl text-2xl font-black text-center focus:ring-2 focus:ring-orange-500 outline-none transition-all shadow-inner ${isDarkMode ? 'bg-slate-800 text-white border-slate-700' : 'bg-gray-50 border-gray-100'}`} autoFocus />
+                      <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={`w-full pl-14 p-4 rounded-2xl text-2xl font-black text-center focus:ring-2 focus:ring-orange-500 outline-none transition-all shadow-inner ${isDarkMode ? 'bg-slate-800 text-white border-slate-700' : 'bg-gray-50 border-gray-200'}`} autoFocus />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className={`p-3 rounded-2xl border text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
-                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Minyak/Tol (RM)</label>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Minyak & Belanja (RM)</label>
                       <input type="number" step="0.01" value={spendingInput} onChange={(e) => setSpendingInput(e.target.value)} className="w-full bg-transparent font-black text-xl text-orange-500 outline-none text-center" />
                     </div>
                     <div className={`p-3 rounded-2xl border relative text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
@@ -343,7 +346,7 @@ const App = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className={`p-3 rounded-2xl border text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
-                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Bil. Job</label>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Jumlah Trip</label>
                       <input type="number" value={jobsInput} onChange={(e) => setJobsInput(e.target.value)} className={`w-full bg-transparent font-black text-xl outline-none text-center ${isDarkMode ? 'text-white' : 'text-slate-900'}`} />
                     </div>
                     <div className={`p-3 rounded-2xl border text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
@@ -358,11 +361,11 @@ const App = () => {
 
             <section className="space-y-2.5 pb-10">
               <h3 className={`font-black text-[9px] uppercase tracking-widest flex items-center gap-2 px-4 mb-4 ${isDarkMode ? 'text-white' : 'text-slate-600'}`}>
-                <Calendar className="w-4 h-4 text-orange-500" /> Jurnal Elite
+                <Calendar className="w-4 h-4 text-white" /> Jurnal Harian
               </h3>
               {stats.filtered.length === 0 ? (
                 <div className={`p-12 rounded-[2.5rem] border-2 border-dashed text-center opacity-30 mx-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200'}`}>
-                    <p className="text-[10px] font-black uppercase tracking-widest">Tiada rekod disimpan.</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-center">Tiada rekod disimpan.</p>
                 </div>
               ) : (
                 stats.filtered.map((item) => (
@@ -397,13 +400,12 @@ const App = () => {
                         </h3>
                     </div>
                     <div className="text-right">
-                        <p className="text-[7px] text-orange-500 font-bold uppercase tracking-widest">Goal Harian</p>
-                        <p className="text-[9px] font-black">{formatCurrency(dailyGoalWithMaint)}</p>
+                        <p className="text-[7px] text-orange-500 font-bold uppercase tracking-widest">Goal</p>
+                        <p className={`text-[9px] font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)}</p>
                     </div>
                 </div>
                 
                 <div className="relative h-48 flex items-end justify-between gap-3 px-1 pt-12">
-                    {/* Target Line */}
                     <div className="absolute left-0 right-0 border-t border-dashed border-orange-500/20 z-0" 
                          style={{ bottom: `${(dailyGoalWithMaint / Math.max(...stats.chart.map(d => d.value), dailyGoalWithMaint * 1.3)) * 100}%` }}>
                     </div>
@@ -440,30 +442,49 @@ const App = () => {
                 </div>
             </section>
 
+            {/* Intelek Operasi & Peringatan Servis */}
             <section className={`p-7 rounded-[3rem] border shadow-xl transition-colors ${isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-slate-900'}`}>
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-6 flex items-center gap-2 justify-center"><Activity className="w-4 h-4 text-emerald-500" /> Intelek Operasi</h3>
+              
+              {/* Peringatan Servis (Sasaran 2500KM) */}
+              <div className={`p-4 rounded-3xl mb-6 border-2 border-dashed flex flex-col items-center justify-center transition-all ${stats.mileageSinceLastService >= 2500 ? 'bg-red-500/10 border-red-500 animate-pulse' : 'bg-black/5 border-white/5'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Wrench className={`w-4 h-4 ${stats.mileageSinceLastService >= 2500 ? 'text-red-500' : 'text-orange-500'}`} />
+                  <span className={`text-[9px] font-black uppercase tracking-widest ${stats.mileageSinceLastService >= 2500 ? 'text-red-500' : 'text-slate-400'}`}>Peringatan Servis</span>
+                </div>
+                <div className="text-center mb-3">
+                  <p className="text-2xl font-black">{stats.mileageSinceLastService.toFixed(0)} <span className="text-[10px] opacity-40">KM</span></p>
+                  <p className={`text-[7px] font-bold uppercase mt-1 ${stats.mileageSinceLastService >= 2500 ? 'text-red-400' : 'text-slate-500'}`}>
+                    {stats.mileageSinceLastService >= 2500 ? "Standby Modal! Dah Cecah Buffer." : `Lagi ${(2500 - stats.mileageSinceLastService).toFixed(0)} KM Tinggal Sebelum Servis Seterusnya`}
+                  </p>
+                </div>
+                <button onClick={resetService} className={`px-4 py-1.5 rounded-full text-[8px] font-black uppercase tracking-widest transition-all ${stats.mileageSinceLastService >= 2500 ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+                  Reset Servis
+                </button>
+              </div>
+
               <div className="grid grid-cols-2 gap-4 mb-4 text-center">
                 <div className={`p-4 rounded-3xl border flex flex-col items-center justify-center ${isDarkMode ? 'bg-orange-500/5 border-orange-500/10' : 'bg-orange-50 border-orange-100'}`}>
-                  <p className="text-[8px] font-black text-orange-500 uppercase mb-1">Simpanan Poket</p>
-                  <p className="text-xl font-black">{formatCurrency(stats.todayNet - stats.todayMaint)}</p>
-                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Gaji Bersih Hari Ini</p>
+                  <p className="text-[8px] font-black text-orange-500 uppercase mb-1">Simpanan</p>
+                  <p className="text-xl font-black tracking-tight flex items-center gap-1"><span className="text-[10px] opacity-40 mt-1">RM</span>{(stats.todayNet - stats.todayMaint).toFixed(0)}</p>
+                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Sedia Masuk Bank</p>
                 </div>
                 <div className={`p-4 rounded-3xl border flex flex-col items-center justify-center ${isDarkMode ? 'bg-blue-500/5 border-blue-500/10' : 'bg-blue-50 border-blue-100'}`}>
                   <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Kos Per KM</p>
-                  <p className="text-xl font-black">{formatCurrency(stats.costPerKm).replace('RM','')}<span className="text-[10px] opacity-40">/KM</span></p>
-                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Analitik Belanja</p>
+                  <p className="text-xl font-black tracking-tight flex items-center gap-1"><span className="text-[10px] opacity-40 mt-1">RM</span>{stats.costPerKm.toFixed(2)}</p>
+                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Gaji Bersih / KM</p>
                 </div>
               </div>
               
               <div className={`p-5 rounded-3xl border text-center mb-6 ${isDarkMode ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
-                <p className="text-[8px] font-black text-emerald-500 uppercase mb-1">Tabung Maintenance</p>
-                <p className="text-3xl font-black">{formatCurrency(stats.todayMaint)}</p>
+                <p className="text-[8px] font-black text-emerald-500 uppercase mb-1">Tabung Maintenance Hari Ini</p>
+                <p className="text-3xl font-black tracking-tighter flex items-center justify-center gap-1"><span className="text-sm opacity-40 mt-1">RM</span>{stats.todayMaint.toFixed(2)}</p>
                 <p className="text-[7px] text-slate-500 font-bold uppercase mt-2">Deduction: Fixed RM10.00</p>
               </div>
 
               <div className={`pt-6 border-t grid grid-cols-2 gap-4 text-center ${isDarkMode ? 'border-slate-800' : 'border-gray-100'}`}>
                   <div>
-                      <span className="text-[8px] font-bold text-slate-500 uppercase block mb-1">Jarak Bulanan</span>
+                      <span className="text-[8px] font-bold text-slate-500 uppercase block mb-1">Total Jarak (Bulan)</span>
                       <span className="text-sm font-black">{stats.mileage.toFixed(1)} KM</span>
                   </div>
                   <div>
@@ -501,9 +522,8 @@ const App = () => {
                 </div>
                 
                 <div className={`p-5 rounded-[2rem] border text-center ${isDarkMode ? 'bg-black/20 border-white/5' : 'bg-gray-50 border-gray-200'}`}>
-                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-2">Misi Harian (Gaji + Maintenance)</p>
-                    <p className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)} <span className="text-[10px] opacity-40 uppercase">/ Hari</span></p>
-                    <p className="text-[8px] text-slate-500 mt-2 font-bold uppercase tracking-tighter">Berdasarkan 22 Hari Bekerja</p>
+                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-2 text-center">Misi Harian (Gaji + Maintenance)</p>
+                    <p className={`text-2xl font-black text-center ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)} <span className="text-[10px] opacity-40 uppercase">/ Hari</span></p>
                 </div>
             </section>
 
@@ -511,7 +531,7 @@ const App = () => {
                 <div className="flex justify-between items-center mb-6">
                     <div className="text-left">
                         <h4 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><TrendingUp className="w-4 h-4 text-orange-500" /> Milestone Job</h4>
-                        <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Lengkapkan misi penghantaran</p>
+                        <p className="text-[7px] text-slate-600 font-bold uppercase mt-1 tracking-widest">Lengkapkan misi penghantaran</p>
                     </div>
                     {isEditingJobTarget ? (
                       <div className="flex items-center gap-1.5 p-1 rounded-lg bg-black/20">
