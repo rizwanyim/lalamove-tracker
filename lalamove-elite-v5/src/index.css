@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Konfigurasi tema ringkas */
+@theme {
+  --color-brand: #f57224;
+}
