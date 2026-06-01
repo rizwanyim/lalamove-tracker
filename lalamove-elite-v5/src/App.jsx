@@ -5,13 +5,13 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, 
-  deleteDoc, onSnapshot
+  deleteDoc, onSnapshot, setDoc
 } from 'firebase/firestore';
 import { 
   Plus, Trash2, Wallet, Target, Calendar, 
   Truck, Settings, Edit2, Check, Hash, 
   X, Save, ChevronRight, Cloud, BarChart3, CreditCard,
-  ChevronLeft, Activity, Download, Zap, MapPin, Info, Wand2, TrendingUp, Sparkles, Sun, Moon, AlertCircle, Wrench
+  ChevronLeft, Activity, Download, Zap, MapPin, Info, Wand2, TrendingUp, Sparkles, Sun, Moon, AlertCircle, RefreshCw, Wrench
 } from 'lucide-react';
 
 // Konfigurasi Firebase
@@ -30,7 +30,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'lalamove-elite-v6';
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'lalamove-elite-v10';
 const appId = rawAppId.replace(/\//g, '_'); 
 
 const App = () => {
@@ -39,8 +39,11 @@ const App = () => {
   const [activeTab, setActiveTab] = useState('dompet'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
   
+  // SYNC SYSTEM (Akses Merentas Peranti)
+  const [syncKey, setSyncKey] = useState(localStorage.getItem('elite_sync_key') || '');
+  const [isSettingSync, setIsSettingSync] = useState(!localStorage.getItem('elite_sync_key'));
+
   const [target, setTarget] = useState(1000); 
   const [isEditingTarget, setIsEditingTarget] = useState(false);
   const [tempTarget, setTempTarget] = useState(1000);
@@ -80,8 +83,9 @@ const App = () => {
 
   useEffect(() => {
     let timeoutId = setTimeout(() => {
-      if (loading) setAuthError("Sambungan perlahan. Sila segar semula (Refresh).");
-    }, 10000);
+      // Jika loading terlalu lama, kita paksa masuk ke apps sahaja
+      setLoading(false);
+    }, 4000); // 4 saat safety timeout untuk terus direct ke apps
 
     const initAuth = async () => {
       try {
@@ -92,7 +96,6 @@ const App = () => {
         }
       } catch (error) { 
         console.error("Auth error:", error); 
-        setAuthError("Gagal menyambung ke pelayan.");
         setLoading(false);
       }
     };
@@ -102,10 +105,7 @@ const App = () => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       clearTimeout(timeoutId);
       setUser(u);
-      if (!u) {
-        setLoading(false);
-        setAuthError("Sesi pengesahan tamat.");
-      }
+      setLoading(false); // Terus matikan loading screen bila selesai auth
     });
 
     return () => {
@@ -115,19 +115,24 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'earnings');
+    if (!user || !syncKey) {
+        if (!syncKey) setLoading(false);
+        return;
+    }
+    
+    // Simpan data di bawah path public dengan syncKey untuk akses pelbagai peranti
+    const q = collection(db, 'artifacts', appId, 'public', 'data', 'earnings');
     const unsubscribe = onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setEarnings(data.sort((a, b) => new Date(b.date) - new Date(a.date)));
+        const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const myData = allData.filter(item => item.syncKey === syncKey);
+        setEarnings(myData.sort((a, b) => new Date(b.date) - new Date(a.date)));
         setLoading(false);
-        setAuthError(null);
       }, (error) => { 
         setLoading(false);
       }
     );
     return () => unsubscribe();
-  }, [user]);
+  }, [user, syncKey]);
 
   const stats = useMemo(() => {
     const selectedMonth = viewDate.getMonth();
@@ -168,23 +173,12 @@ const App = () => {
         maintenance += dayMaint;
     });
 
-    const chartData = [...Array(7)].map((_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (6 - i));
-      const ds = d.toLocaleDateString('en-CA');
-      return {
-        label: d.toLocaleDateString('ms-MY', { weekday: 'short' }),
-        value: fullDailyMap[ds]?.net || 0,
-      };
-    });
-
     // Kira Total Jarak Keseluruhan (Lifetime) untuk servis
     const lifetimeMileage = earnings.reduce((sum, entry) => sum + (Number(entry.mileage) || 0), 0);
     const mileageSinceLastService = lifetimeMileage - lastServiceMileage;
 
     return { 
       filtered: monthlyEntries, profit, maintenance, jobs: jobsTotal, spending: spendingTotal, mileage: mileageTotal,
-      chart: chartData,
       todayNet: fullDailyMap[todayStr]?.net || 0,
       todayMaint: (fullDailyMap[todayStr]?.net || 0) > 0 ? 10 : 0,
       costPerKm: mileageTotal > 0 ? (spendingTotal / mileageTotal) : 0,
@@ -196,6 +190,14 @@ const App = () => {
 
   const progressPercent = Math.min((stats.profit / target) * 100, 100);
 
+  const saveSyncKey = (val) => {
+    if (!val) return;
+    const key = val.toUpperCase();
+    localStorage.setItem('elite_sync_key', key);
+    setSyncKey(key);
+    setIsSettingSync(false);
+  };
+
   const resetService = () => {
     if (confirm("Adakah anda sudah menukar minyak hitam? Meter servis akan diset semula.")) {
       const currentKm = stats.lifetimeMileage;
@@ -206,17 +208,18 @@ const App = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!amount || !user) return;
+    if (!amount || !user || !syncKey) return;
     const payload = {
       net: parseFloat(amount),
       jobs: parseInt(jobsInput) || 0,
       spending: parseFloat(spendingInput) || 0,
       mileage: parseFloat(mileageInput) || 0,
       date: date,
+      syncKey: syncKey,
       timestamp: Date.now()
     };
     try {
-      const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'earnings');
+      const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'earnings');
       if (editingId) {
         await updateDoc(doc(colRef, editingId), payload);
         setEditingId(null);
@@ -235,24 +238,11 @@ const App = () => {
 
   const formatCurrency = (val) => new Intl.NumberFormat('ms-MY', { style: 'currency', currency: 'MYR' }).format(val || 0);
 
-  if (loading || authError) return (
+  if (loading) return (
     <div className={`min-h-screen ${isDarkMode ? 'bg-slate-950 text-white' : 'bg-gray-50 text-slate-900'} flex flex-col items-center justify-center p-8 text-center font-['Poppins']`}>
       <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
-      {authError ? (
-        <div className="animate-in fade-in zoom-in duration-300">
-          <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center text-red-500 mx-auto mb-6 border border-red-500/20">
-            <AlertCircle className="w-10 h-10" />
-          </div>
-          <h2 className="text-xl font-black mb-2 uppercase">Portal Tersekat</h2>
-          <p className="text-slate-500 text-sm mb-8 leading-relaxed">{authError}</p>
-          <button onClick={() => window.location.reload()} className="px-8 py-3 bg-orange-600 text-white font-black rounded-2xl shadow-xl shadow-orange-900/20 active:scale-95 transition-all text-xs uppercase tracking-widest">Cuba Semula</button>
-        </div>
-      ) : (
-        <>
-          <div className="w-16 h-16 border-4 border-orange-500/10 border-t-orange-500 rounded-full animate-spin mb-4"></div>
-          <p className="text-orange-500 font-bold uppercase tracking-[0.3em] animate-pulse text-[10px]">Lala Tracker Connecting...</p>
-        </>
-      )}
+      <div className="w-16 h-16 border-4 border-orange-500/10 border-t-orange-500 rounded-full animate-spin mb-4"></div>
+      <p className="text-orange-500 font-bold uppercase tracking-[0.3em] animate-pulse text-[10px]">Lala Tracker Connecting...</p>
     </div>
   );
 
@@ -261,18 +251,40 @@ const App = () => {
       
       <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
 
+      {/* SYNC KEY MODAL */}
+      {isSettingSync && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/95 backdrop-blur-lg">
+            <div className={`max-w-xs w-full p-8 rounded-[3rem] border shadow-2xl text-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-100'}`}>
+                <div className="w-16 h-16 bg-orange-500/10 rounded-2xl flex items-center justify-center text-orange-500 mx-auto mb-6"><RefreshCw className="w-8 h-8 animate-spin" /></div>
+                <h2 className={`text-xl font-black mb-2 uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Akses Cloud</h2>
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-[0.2em] mb-8 leading-relaxed px-2">Masukkan Kunci Sync anda untuk selaraskan data di Laptop & Phone.</p>
+                <input 
+                    type="text" 
+                    placeholder="E.G. WAN-SK-99"
+                    className={`w-full p-4 rounded-2xl text-center font-black uppercase mb-6 outline-none border focus:ring-2 focus:ring-orange-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-gray-50 border-gray-200'}`}
+                    onKeyDown={(e) => e.key === 'Enter' && saveSyncKey(e.target.value)}
+                    id="syncInput"
+                />
+                <button 
+                    onClick={() => saveSyncKey(document.getElementById('syncInput').value)}
+                    className="w-full py-4 bg-orange-600 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all text-xs uppercase tracking-widest"
+                >Buka Portal</button>
+            </div>
+          </div>
+      )}
+
       {/* Header Sleek */}
       <header className={`pt-6 pb-14 px-6 rounded-b-[3.5rem] shadow-2xl relative overflow-hidden transition-all duration-500 ${isDarkMode ? 'bg-gradient-to-br from-orange-600 via-orange-700 to-red-800 text-white' : 'bg-gradient-to-br from-orange-500 to-orange-400 text-white'}`}>
         <div className="absolute top-0 right-0 w-80 h-80 bg-white/5 rounded-full -mr-32 -mt-32 blur-[80px]"></div>
         <div className="max-w-md mx-auto relative z-10">
           <div className="flex justify-between items-center mb-6">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 text-left">
               <div className="w-9 h-9 bg-white/10 backdrop-blur-xl rounded-xl flex items-center justify-center border border-white/20">
                 <Truck className="w-5 h-5" />
               </div>
-              <div className="text-left leading-none">
+              <div className="leading-none text-left">
                 <h1 className="text-sm font-black tracking-tight italic uppercase">Lala Tracker</h1>
-                <span className="text-[7px] font-bold opacity-70 uppercase tracking-widest leading-none">Wan SK Edition</span>
+                <span className="text-[7px] font-bold opacity-70 uppercase tracking-widest leading-none">Sync: {syncKey || 'None'}</span>
               </div>
             </div>
             
@@ -280,6 +292,7 @@ const App = () => {
                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90">
                  {isDarkMode ? <Sun className="w-4 h-4 text-orange-200" /> : <Moon className="w-4 h-4 text-white" />}
                </button>
+               <button onClick={() => setIsSettingSync(true)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90"><Settings className="w-4 h-4 text-white" /></button>
             </div>
           </div>
 
@@ -290,7 +303,7 @@ const App = () => {
           </div>
 
           <div className="text-center">
-            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-2 opacity-60">GAJI BERSIH</p>
+            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-2 opacity-60">GAJI BERSIH (POCKET)</p>
             <h2 className="text-6xl font-black mb-4 drop-shadow-2xl tracking-tighter text-center flex items-center justify-center">
               <span className="text-xl font-light opacity-40 mr-3 mt-1">RM</span>
               <span>{stats.profit.toFixed(0)}</span>
@@ -368,21 +381,28 @@ const App = () => {
                     <p className="text-[10px] font-black uppercase tracking-widest text-center">Tiada rekod disimpan.</p>
                 </div>
               ) : (
-                stats.filtered.map((item) => (
-                  <div key={item.id} className={`p-4 rounded-3xl border flex justify-between items-center mb-3 mx-1 shadow-lg transition-all group ${isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-orange-500/30' : 'bg-white border-gray-100'}`}>
-                    <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg transition-all ${item.date === todayStr ? 'bg-orange-600' : 'bg-slate-800'}`}><Activity className="w-5 h-5" /></div>
-                      <div className="text-left leading-tight">
-                        <p className={`font-black text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>RM{Number(item.net).toFixed(2)}</p>
-                        <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">{new Date(item.date).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short' })} • {item.jobs} Job</p>
+                stats.filtered.map((item) => {
+                  const entryMaint = item.net > 0 ? 10 : 0;
+                  const netProfitForDay = item.net - entryMaint - (item.spending || 0);
+                  
+                  return (
+                    <div key={item.id} className={`p-4 rounded-3xl border flex justify-between items-center mb-3 mx-1 shadow-lg transition-all group ${isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-orange-500/30' : 'bg-white border-gray-100'}`}>
+                      <div className="flex items-center gap-4 text-left">
+                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg transition-all ${item.date === todayStr ? 'bg-orange-600' : 'bg-slate-800'}`}><Activity className="w-5 h-5" /></div>
+                        <div className="text-left leading-tight">
+                          <p className={`font-black text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>RM {netProfitForDay.toFixed(2)}</p>
+                          <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
+                            {new Date(item.date).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short' })} • {item.jobs} Job • RM {Number(item.net).toFixed(0)} Kasar
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setEditingId(item.id); setAmount(String(item.net)); setJobsInput(String(item.jobs)); setSpendingInput(String(item.spending)); setMileageInput(item.mileage || ''); setDate(item.date); setShowForm(true); }} className="p-2 text-slate-400 hover:text-orange-500"><Edit2 className="w-4 h-4" /></button>
+                        <button onClick={async () => { if(confirm('Padam?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'earnings', item.id)) }} className="p-2 text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => { setEditingId(item.id); setAmount(String(item.net)); setJobsInput(String(item.jobs)); setSpendingInput(String(item.spending)); setMileageInput(item.mileage || ''); setDate(item.date); setShowForm(true); }} className="p-2 text-slate-400 hover:text-orange-500"><Edit2 className="w-4 h-4" /></button>
-                      <button onClick={async () => { if(confirm('Padam?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'earnings', item.id)) }} className="p-2 text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </section>
           </div>
@@ -391,58 +411,7 @@ const App = () => {
         {/* TAB 2: STATS */}
         {activeTab === 'stats' && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-400">
-            {/* Candlestick Style Chart */}
-            <section className={`p-6 rounded-[3rem] mb-6 shadow-2xl relative overflow-hidden transition-colors ${isDarkMode ? 'bg-slate-900/90 border border-slate-800' : 'bg-white border border-gray-100'}`}>
-                <div className="flex justify-between items-center mb-8">
-                    <div>
-                        <h3 className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            <BarChart3 className="w-4 h-4 text-orange-500" /> Prestasi 7 Hari
-                        </h3>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-[7px] text-orange-500 font-bold uppercase tracking-widest">Goal</p>
-                        <p className={`text-[9px] font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)}</p>
-                    </div>
-                </div>
-                
-                <div className="relative h-48 flex items-end justify-between gap-3 px-1 pt-12">
-                    <div className="absolute left-0 right-0 border-t border-dashed border-orange-500/20 z-0" 
-                         style={{ bottom: `${(dailyGoalWithMaint / Math.max(...stats.chart.map(d => d.value), dailyGoalWithMaint * 1.3)) * 100}%` }}>
-                    </div>
-
-                    {stats.chart.map((day, idx) => {
-                        const maxH = Math.max(...stats.chart.map(d => d.value), dailyGoalWithMaint * 1.3);
-                        const height = (day.value / maxH) * 100;
-                        const isHit = day.value >= dailyGoalWithMaint;
-
-                        return (
-                            <div key={idx} className="flex-1 flex flex-col items-center group relative z-10">
-                                <div className="relative w-full flex items-end justify-center h-full">
-                                    {day.value > 0 && <div className={`absolute bottom-0 w-[1px] h-full ${isHit ? 'bg-orange-500/30' : 'bg-slate-500/20'}`}></div>}
-                                    <div 
-                                        style={{ height: `${Math.max(height, 5)}%` }} 
-                                        className={`w-full max-w-[14px] rounded-lg transition-all duration-1000 ${
-                                          day.value > 0 
-                                            ? isHit 
-                                              ? 'bg-gradient-to-t from-orange-600 via-orange-400 to-yellow-300 shadow-[0_0_15px_rgba(249,115,22,0.6)]' 
-                                              : isDarkMode ? 'bg-slate-700' : 'bg-gray-300'
-                                            : isDarkMode ? 'bg-slate-800 opacity-20' : 'bg-gray-200'
-                                        }`}
-                                    ></div>
-                                    {day.value > 0 && (
-                                      <div className="absolute bottom-full mb-2 opacity-0 group-hover:opacity-100 bg-white text-slate-900 text-[8px] font-black px-1.5 py-1 rounded shadow-2xl transition-all whitespace-nowrap z-50">
-                                          {formatCurrency(day.value)}
-                                      </div>
-                                    )}
-                                </div>
-                                <span className={`text-[7px] font-black mt-4 uppercase ${isHit ? 'text-orange-500' : 'text-slate-500'}`}>{day.label}</span>
-                            </div>
-                        );
-                    })}
-                </div>
-            </section>
-
-            {/* Intelek Operasi & Peringatan Servis */}
+            {/* Peringatan Servis */}
             <section className={`p-7 rounded-[3rem] border shadow-xl transition-colors ${isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-slate-900'}`}>
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-6 flex items-center gap-2 justify-center"><Activity className="w-4 h-4 text-emerald-500" /> Intelek Operasi</h3>
               
@@ -467,7 +436,7 @@ const App = () => {
                 <div className={`p-4 rounded-3xl border flex flex-col items-center justify-center ${isDarkMode ? 'bg-orange-500/5 border-orange-500/10' : 'bg-orange-50 border-orange-100'}`}>
                   <p className="text-[8px] font-black text-orange-500 uppercase mb-1">Simpanan</p>
                   <p className="text-xl font-black tracking-tight flex items-center gap-1"><span className="text-[10px] opacity-40 mt-1">RM</span>{(stats.todayNet - stats.todayMaint).toFixed(0)}</p>
-                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Sedia Masuk Bank</p>
+                  <p className="text-[7px] text-slate-500 font-bold uppercase mt-1">Gaji Bersih Hari Ini</p>
                 </div>
                 <div className={`p-4 rounded-3xl border flex flex-col items-center justify-center ${isDarkMode ? 'bg-blue-500/5 border-blue-500/10' : 'bg-blue-50 border-blue-100'}`}>
                   <p className="text-[8px] font-black text-blue-500 uppercase mb-1">Kos Per KM</p>
@@ -524,6 +493,7 @@ const App = () => {
                 <div className={`p-5 rounded-[2rem] border text-center ${isDarkMode ? 'bg-black/20 border-white/5' : 'bg-gray-50 border-gray-200'}`}>
                     <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-2 text-center">Misi Harian (Gaji + Maintenance)</p>
                     <p className={`text-2xl font-black text-center ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)} <span className="text-[10px] opacity-40 uppercase">/ Hari</span></p>
+                    <p className="text-[8px] text-slate-500 mt-2 font-bold uppercase tracking-tighter text-center">Berdasarkan 22 Hari Bekerja</p>
                 </div>
             </section>
 
@@ -553,15 +523,24 @@ const App = () => {
       </main>
 
       {/* Bottom Navigation */}
-      <footer className={`fixed bottom-0 left-0 right-0 p-5 pb-9 border-t backdrop-blur-2xl flex justify-around items-center z-50 transition-all ${isDarkMode ? 'bg-slate-950/90 border-slate-800/50' : 'bg-white/95 border-gray-200'}`}>
-            <button onClick={() => setActiveTab('dompet')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'dompet' ? 'text-orange-600 scale-110' : 'text-slate-500'}`}>
-                <Wallet className={`w-6 h-6 ${activeTab === 'dompet' ? 'drop-shadow-lg' : 'opacity-50'}`} /><span className="text-[8px] font-black uppercase tracking-widest">Dompet</span>
+      <footer className={`fixed bottom-0 left-0 right-0 p-5 pb-10 border-t backdrop-blur-3xl flex justify-around items-center z-50 transition-all ${isDarkMode ? 'bg-slate-950/90 border-slate-800/50 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white/95 border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]'}`}>
+            <button onClick={() => setActiveTab('dompet')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'dompet' ? 'text-orange-500 scale-110' : 'text-slate-500 opacity-40'}`}>
+                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'dompet' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
+                  <Wallet className={`w-6 h-6 ${activeTab === 'dompet' ? 'drop-shadow-lg' : ''}`} />
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Dompet</span>
             </button>
-            <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'stats' ? 'text-orange-600 scale-110' : 'text-slate-500'}`}>
-                <Activity className={`w-6 h-6 ${activeTab === 'stats' ? 'drop-shadow-lg' : 'opacity-50'}`} /><span className="text-[8px] font-black uppercase tracking-widest">Stats</span>
+            <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'stats' ? 'text-orange-500 scale-110' : 'text-slate-500 opacity-40'}`}>
+                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'stats' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
+                  <Activity className={`w-6 h-6 ${activeTab === 'stats' ? 'drop-shadow-lg' : ''}`} />
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Stats</span>
             </button>
-            <button onClick={() => setActiveTab('misi')} className={`flex flex-col items-center gap-1.5 transition-all ${activeTab === 'misi' ? 'text-orange-600 scale-110' : 'text-slate-500'}`}>
-                <Target className={`w-6 h-6 ${activeTab === 'misi' ? 'drop-shadow-lg' : 'opacity-50'}`} /><span className="text-[8px] font-black uppercase tracking-widest">Misi</span>
+            <button onClick={() => setActiveTab('misi')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'misi' ? 'text-orange-600 scale-110' : 'text-slate-500 opacity-40'}`}>
+                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'misi' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
+                  <Target className={`w-6 h-6 ${activeTab === 'misi' ? 'drop-shadow-lg' : ''}`} />
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Misi</span>
             </button>
       </footer>
     </div>
