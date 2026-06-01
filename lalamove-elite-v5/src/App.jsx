@@ -273,7 +273,7 @@ const App = () => {
                 <p className="text-slate-500 text-[10px] font-bold uppercase tracking-[0.2em] mb-8 leading-relaxed px-2">Masukkan Kunci Sync anda untuk selaraskan data di Laptop & Phone.</p>
                 <input 
                     type="text" 
-                    placeholder="E.G. WAN-SK-99"
+                    placeholder="E.G. LALA-99"
                     className={`w-full p-4 rounded-2xl text-center font-black uppercase mb-6 outline-none border focus:ring-2 focus:ring-orange-500 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-gray-50 border-gray-200'}`}
                     onKeyDown={(e) => e.key === 'Enter' && saveSyncKey(e.target.value)}
                     id="syncInput"
@@ -305,9 +305,7 @@ const App = () => {
                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90">
                  {isDarkMode ? <Sun className="w-4 h-4 text-orange-200" /> : <Moon className="w-4 h-4 text-white" />}
                </button>
-               <button onClick={() => setIsSettingSync(true)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90">
-                <Settings className="w-4 h-4 text-white" />
-               </button>
+               <button onClick={() => setIsSettingSync(true)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90"><Settings className="w-4 h-4 text-white" /></button>
             </div>
           </div>
 
@@ -404,16 +402,16 @@ const App = () => {
                     <div key={item.id} className={`p-4 rounded-3xl border flex justify-between items-center mb-3 mx-1 shadow-lg transition-all group ${isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-orange-500/30' : 'bg-white border-gray-100'}`}>
                       <div className="flex items-center gap-4">
                         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg transition-all ${item.date === todayStr ? 'bg-orange-600' : 'bg-slate-800'}`}><Activity className="w-5 h-5" /></div>
-                        <div className="text-left leading-tight">
+                        <div className="text-left leading-none">
                           <p className={`font-black text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>RM{Number(pocketProfit).toFixed(2)}</p>
                           <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
                             {new Date(item.date).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short' })} • {item.jobs} Job • RM{Number(item.net).toFixed(0)} Kasar
                           </p>
                         </div>
                       </div>
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { setEditingId(item.id); setAmount(String(item.net)); setJobsInput(String(item.jobs)); setSpendingInput(String(item.spending)); setMileageInput(item.mileage || ''); setDate(item.date); setShowForm(true); }} className="p-2 text-slate-400 hover:text-orange-500"><Edit2 className="w-4 h-4" /></button>
-                        <button onClick={async () => { if(confirm('Padam?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'earnings', item.id)) }} className="p-2 text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                      <div className="flex gap-1">
+                        <button onClick={() => { setEditingId(item.id); setAmount(String(item.net)); setJobsInput(String(item.jobs)); setSpendingInput(String(item.spending)); setMileageInput(item.mileage || ''); setDate(item.date); setShowForm(true); }} className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'text-white hover:bg-slate-800' : 'text-slate-700 hover:bg-gray-100'}`}><Edit2 className="w-4 h-4" /></button>
+                        <button onClick={async () => { if(confirm('Padam rekod ini?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'earnings', item.id)) }} className="p-2 text-red-500 hover:text-red-400 rounded-xl transition-colors"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
                   );
@@ -506,7 +504,7 @@ const App = () => {
                 </div>
                 
                 <div className={`p-5 rounded-[2rem] border text-center ${isDarkMode ? 'bg-black/20 border-white/5' : 'bg-gray-50 border-gray-200'}`}>
-                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-2 text-center">Misi Harian (Gaji + Maintenance)</p>
+                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-2 text-center">Target Gaji Harian</p>
                     <p className={`text-2xl font-black text-center ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{formatCurrency(dailyGoalWithMaint)} <span className="text-[10px] opacity-40 uppercase">/ Hari</span></p>
                     <p className="text-[8px] text-slate-500 mt-2 font-bold uppercase tracking-tighter text-center">Berdasarkan 22 Hari Bekerja</p>
                 </div>
@@ -537,7 +535,7 @@ const App = () => {
         )}
       </main>
 
-      {/* Optimized Slim Task Bar (Thinner design for mobile as requested) */}
+      {/* Optimized Slim Task Bar */}
       <footer className={`fixed bottom-0 left-0 right-0 pt-2 pb-5 px-6 border-t backdrop-blur-3xl flex justify-around items-center z-50 transition-all duration-300 ${isDarkMode ? 'bg-slate-950/90 border-slate-800/40 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]' : 'bg-white/90 border-gray-200/80 shadow-[0_-8px_30px_rgba(0,0,0,0.03)]'}`}>
             <button onClick={() => setActiveTab('dompet')} className={`flex flex-col items-center gap-0.5 transition-all duration-300 ${activeTab === 'dompet' ? 'text-orange-500 scale-105' : 'text-slate-500/70 hover:text-slate-400'}`}>
                 <Wallet className={`w-5 h-5 ${activeTab === 'dompet' ? 'drop-shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'opacity-60'}`} />
