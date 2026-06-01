@@ -5,7 +5,7 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, 
-  deleteDoc, onSnapshot, setDoc
+  deleteDoc, onSnapshot
 } from 'firebase/firestore';
 import { 
   Plus, Trash2, Wallet, Target, Calendar, 
@@ -30,7 +30,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'lalamove-elite-v10';
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'lalamove-elite-v6';
 const appId = rawAppId.replace(/\//g, '_'); 
 
 const App = () => {
@@ -39,8 +39,9 @@ const App = () => {
   const [activeTab, setActiveTab] = useState('dompet'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
   
-  // SYNC SYSTEM (Akses Merentas Peranti)
+  // SYNC SYSTEM: Menggunakan Sync Key supaya data sama di semua device
   const [syncKey, setSyncKey] = useState(localStorage.getItem('elite_sync_key') || '');
   const [isSettingSync, setIsSettingSync] = useState(!localStorage.getItem('elite_sync_key'));
 
@@ -69,6 +70,7 @@ const App = () => {
   const dailyGoalWithMaint = dailyBase + 10;
   const todayStr = new Date().toLocaleDateString('en-CA');
 
+  // Anggaran Jarak (KM) berdasarkan formula: Gross = Net / 0.784
   const calculateEstimatedKm = (netTotal) => {
     const net = parseFloat(netTotal);
     const jobs = parseInt(jobsInput) || 1;
@@ -82,10 +84,10 @@ const App = () => {
   const estimatedKmValue = useMemo(() => calculateEstimatedKm(amount), [amount, jobsInput]);
 
   useEffect(() => {
-    let timeoutId = setTimeout(() => {
-      // Jika loading terlalu lama, kita paksa masuk ke apps sahaja
+    // Failsafe Pemasa (4 saat) untuk elak sangkut loading
+    const timer = setTimeout(() => {
       setLoading(false);
-    }, 4000); // 4 saat safety timeout untuk terus direct ke apps
+    }, 4000);
 
     const initAuth = async () => {
       try {
@@ -103,30 +105,30 @@ const App = () => {
     initAuth();
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      clearTimeout(timeoutId);
       setUser(u);
-      setLoading(false); // Terus matikan loading screen bila selesai auth
     });
 
     return () => {
       unsubscribe();
-      clearTimeout(timeoutId);
+      clearTimeout(timer);
     };
   }, []);
 
   useEffect(() => {
     if (!user || !syncKey) {
-        if (!syncKey) setLoading(false);
-        return;
+      if (!syncKey) setLoading(false);
+      return;
     }
     
-    // Simpan data di bawah path public dengan syncKey untuk akses pelbagai peranti
+    // Path public dikongsi antara device menggunakan Sync Key
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'earnings');
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const myData = allData.filter(item => item.syncKey === syncKey);
         setEarnings(myData.sort((a, b) => new Date(b.date) - new Date(a.date)));
         setLoading(false);
+        setAuthError(null);
       }, (error) => { 
         setLoading(false);
       }
@@ -173,12 +175,23 @@ const App = () => {
         maintenance += dayMaint;
     });
 
+    const chartData = [...Array(7)].map((_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      const ds = d.toLocaleDateString('en-CA');
+      return {
+        label: d.toLocaleDateString('ms-MY', { weekday: 'short' }),
+        value: fullDailyMap[ds]?.net || 0,
+      };
+    });
+
     // Kira Total Jarak Keseluruhan (Lifetime) untuk servis
     const lifetimeMileage = earnings.reduce((sum, entry) => sum + (Number(entry.mileage) || 0), 0);
     const mileageSinceLastService = lifetimeMileage - lastServiceMileage;
 
     return { 
       filtered: monthlyEntries, profit, maintenance, jobs: jobsTotal, spending: spendingTotal, mileage: mileageTotal,
+      chart: chartData,
       todayNet: fullDailyMap[todayStr]?.net || 0,
       todayMaint: (fullDailyMap[todayStr]?.net || 0) > 0 ? 10 : 0,
       costPerKm: mileageTotal > 0 ? (spendingTotal / mileageTotal) : 0,
@@ -247,14 +260,14 @@ const App = () => {
   );
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 font-['Poppins'] pb-32 ${isDarkMode ? 'bg-[#020617] text-slate-200' : 'bg-gray-50 text-slate-900'}`}>
+    <div className={`min-h-screen transition-colors duration-300 font-['Poppins'] pb-28 ${isDarkMode ? 'bg-[#020617] text-slate-200' : 'bg-gray-50 text-slate-900'}`}>
       
       <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700;800&display=swap" rel="stylesheet" />
 
       {/* SYNC KEY MODAL */}
       {isSettingSync && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/95 backdrop-blur-lg">
-            <div className={`max-w-xs w-full p-8 rounded-[3rem] border shadow-2xl text-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-100'}`}>
+            <div className={`max-w-xs w-full p-8 rounded-[2.5rem] border shadow-2xl text-center ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-100'}`}>
                 <div className="w-16 h-16 bg-orange-500/10 rounded-2xl flex items-center justify-center text-orange-500 mx-auto mb-6"><RefreshCw className="w-8 h-8 animate-spin" /></div>
                 <h2 className={`text-xl font-black mb-2 uppercase tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Akses Cloud</h2>
                 <p className="text-slate-500 text-[10px] font-bold uppercase tracking-[0.2em] mb-8 leading-relaxed px-2">Masukkan Kunci Sync anda untuk selaraskan data di Laptop & Phone.</p>
@@ -278,13 +291,13 @@ const App = () => {
         <div className="absolute top-0 right-0 w-80 h-80 bg-white/5 rounded-full -mr-32 -mt-32 blur-[80px]"></div>
         <div className="max-w-md mx-auto relative z-10">
           <div className="flex justify-between items-center mb-6">
-            <div className="flex items-center gap-2 text-left">
+            <div className="flex items-center gap-2">
               <div className="w-9 h-9 bg-white/10 backdrop-blur-xl rounded-xl flex items-center justify-center border border-white/20">
                 <Truck className="w-5 h-5" />
               </div>
-              <div className="leading-none text-left">
+              <div className="text-left leading-none">
                 <h1 className="text-sm font-black tracking-tight italic uppercase">Lala Tracker</h1>
-                <span className="text-[7px] font-bold opacity-70 uppercase tracking-widest leading-none">Sync: {syncKey || 'None'}</span>
+                <span className="text-[7px] font-bold opacity-70 uppercase tracking-widest leading-none">Wan SK Edition</span>
               </div>
             </div>
             
@@ -292,18 +305,20 @@ const App = () => {
                <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90">
                  {isDarkMode ? <Sun className="w-4 h-4 text-orange-200" /> : <Moon className="w-4 h-4 text-white" />}
                </button>
-               <button onClick={() => setIsSettingSync(true)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90"><Settings className="w-4 h-4 text-white" /></button>
+               <button onClick={() => setIsSettingSync(true)} className="p-2.5 bg-black/20 rounded-xl border border-white/10 backdrop-blur-md transition-all active:scale-90">
+                <Settings className="w-4 h-4 text-white" />
+               </button>
             </div>
           </div>
 
           <div className="flex items-center justify-between mb-8 bg-black/20 rounded-2xl p-1.5 border border-white/10 backdrop-blur-xl">
             <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1))} className="p-2 hover:bg-white/10 rounded-lg"><ChevronLeft className="w-4 h-4" /></button>
-            <p className="text-[10px] font-bold uppercase tracking-widest">{viewDate.toLocaleString('ms-MY', { month: 'long', year: 'numeric' })}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest">{viewDate.toLocaleString('ms-MY', { month: 'long', year: 'numeric' })}</p>
             <button onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1))} className="p-2 hover:bg-white/10 rounded-lg"><ChevronRight className="w-4 h-4" /></button>
           </div>
 
           <div className="text-center">
-            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-2 opacity-60">GAJI BERSIH (POCKET)</p>
+            <p className="text-[8px] font-black uppercase tracking-[0.3em] mb-1 opacity-60">GAJI BERSIH</p>
             <h2 className="text-6xl font-black mb-4 drop-shadow-2xl tracking-tighter text-center flex items-center justify-center">
               <span className="text-xl font-light opacity-40 mr-3 mt-1">RM</span>
               <span>{stats.profit.toFixed(0)}</span>
@@ -346,7 +361,7 @@ const App = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className={`p-3 rounded-2xl border text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
-                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Minyak & Belanja (RM)</label>
+                      <label className="block text-[8px] font-bold text-slate-500 uppercase mb-1">Minyak/Tol (RM)</label>
                       <input type="number" step="0.01" value={spendingInput} onChange={(e) => setSpendingInput(e.target.value)} className="w-full bg-transparent font-black text-xl text-orange-500 outline-none text-center" />
                     </div>
                     <div className={`p-3 rounded-2xl border relative text-center ${isDarkMode ? 'bg-slate-800/30 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
@@ -374,7 +389,7 @@ const App = () => {
 
             <section className="space-y-2.5 pb-10">
               <h3 className={`font-black text-[9px] uppercase tracking-widest flex items-center gap-2 px-4 mb-4 ${isDarkMode ? 'text-white' : 'text-slate-600'}`}>
-                <Calendar className="w-4 h-4 text-white" /> Jurnal Harian
+                <Calendar className="w-4 h-4 text-orange-500" /> Jurnal Harian
               </h3>
               {stats.filtered.length === 0 ? (
                 <div className={`p-12 rounded-[2.5rem] border-2 border-dashed text-center opacity-30 mx-4 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200'}`}>
@@ -382,23 +397,23 @@ const App = () => {
                 </div>
               ) : (
                 stats.filtered.map((item) => {
-                  const entryMaint = item.net > 0 ? 10 : 0;
-                  const netProfitForDay = item.net - entryMaint - (item.spending || 0);
-                  
+                  const dayMaint = item.net > 0 ? 10 : 0;
+                  const pocketProfit = item.net - dayMaint - (item.spending || 0);
+
                   return (
                     <div key={item.id} className={`p-4 rounded-3xl border flex justify-between items-center mb-3 mx-1 shadow-lg transition-all group ${isDarkMode ? 'bg-slate-900/60 border-slate-800 hover:border-orange-500/30' : 'bg-white border-gray-100'}`}>
-                      <div className="flex items-center gap-4 text-left">
+                      <div className="flex items-center gap-4">
                         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg transition-all ${item.date === todayStr ? 'bg-orange-600' : 'bg-slate-800'}`}><Activity className="w-5 h-5" /></div>
                         <div className="text-left leading-tight">
-                          <p className={`font-black text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>RM {netProfitForDay.toFixed(2)}</p>
+                          <p className={`font-black text-xl tracking-tighter ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>RM{Number(pocketProfit).toFixed(2)}</p>
                           <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
-                            {new Date(item.date).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short' })} • {item.jobs} Job • RM {Number(item.net).toFixed(0)} Kasar
+                            {new Date(item.date).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short' })} • {item.jobs} Job • RM{Number(item.net).toFixed(0)} Kasar
                           </p>
                         </div>
                       </div>
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button onClick={() => { setEditingId(item.id); setAmount(String(item.net)); setJobsInput(String(item.jobs)); setSpendingInput(String(item.spending)); setMileageInput(item.mileage || ''); setDate(item.date); setShowForm(true); }} className="p-2 text-slate-400 hover:text-orange-500"><Edit2 className="w-4 h-4" /></button>
-                        <button onClick={async () => { if(confirm('Padam?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'earnings', item.id)) }} className="p-2 text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={async () => { if(confirm('Padam?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'earnings', item.id)) }} className="p-2 text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </div>
                   );
@@ -411,7 +426,7 @@ const App = () => {
         {/* TAB 2: STATS */}
         {activeTab === 'stats' && (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-400">
-            {/* Peringatan Servis */}
+            {/* Intelek Operasi & Peringatan Servis */}
             <section className={`p-7 rounded-[3rem] border shadow-xl transition-colors ${isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-slate-900'}`}>
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-6 flex items-center gap-2 justify-center"><Activity className="w-4 h-4 text-emerald-500" /> Intelek Operasi</h3>
               
@@ -419,12 +434,12 @@ const App = () => {
               <div className={`p-4 rounded-3xl mb-6 border-2 border-dashed flex flex-col items-center justify-center transition-all ${stats.mileageSinceLastService >= 2500 ? 'bg-red-500/10 border-red-500 animate-pulse' : 'bg-black/5 border-white/5'}`}>
                 <div className="flex items-center gap-2 mb-2">
                   <Wrench className={`w-4 h-4 ${stats.mileageSinceLastService >= 2500 ? 'text-red-500' : 'text-orange-500'}`} />
-                  <span className={`text-[9px] font-black uppercase tracking-widest ${stats.mileageSinceLastService >= 2500 ? 'text-red-500' : 'text-slate-400'}`}>Peringatan Servis</span>
+                  <span className={`text-[9px] font-black uppercase tracking-widest ${stats.mileageSinceLastService >= 2500 ? 'text-red-500' : 'text-slate-400'}`}>Peringatan Servis (2500 KM)</span>
                 </div>
                 <div className="text-center mb-3">
                   <p className="text-2xl font-black">{stats.mileageSinceLastService.toFixed(0)} <span className="text-[10px] opacity-40">KM</span></p>
                   <p className={`text-[7px] font-bold uppercase mt-1 ${stats.mileageSinceLastService >= 2500 ? 'text-red-400' : 'text-slate-500'}`}>
-                    {stats.mileageSinceLastService >= 2500 ? "Standby Modal! Dah Cecah Buffer." : `Lagi ${(2500 - stats.mileageSinceLastService).toFixed(0)} KM Tinggal Sebelum Servis Seterusnya`}
+                    {stats.mileageSinceLastService >= 2500 ? "Standby Modal! Dah Cecah Buffer." : `Lagi ${(2500 - stats.mileageSinceLastService).toFixed(0)} KM Sebelum Buffer.`}
                   </p>
                 </div>
                 <button onClick={resetService} className={`px-4 py-1.5 rounded-full text-[8px] font-black uppercase tracking-widest transition-all ${stats.mileageSinceLastService >= 2500 ? 'bg-red-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
@@ -501,7 +516,7 @@ const App = () => {
                 <div className="flex justify-between items-center mb-6">
                     <div className="text-left">
                         <h4 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><TrendingUp className="w-4 h-4 text-orange-500" /> Milestone Job</h4>
-                        <p className="text-[7px] text-slate-600 font-bold uppercase mt-1 tracking-widest">Lengkapkan misi penghantaran</p>
+                        <p className="text-[7px] text-slate-600 font-bold uppercase mt-1">Lengkapkan misi penghantaran</p>
                     </div>
                     {isEditingJobTarget ? (
                       <div className="flex items-center gap-1.5 p-1 rounded-lg bg-black/20">
@@ -510,7 +525,7 @@ const App = () => {
                       </div>
                     ) : (
                       <button onClick={() => setIsEditingJobTarget(true)} className="text-[10px] font-black text-orange-500 bg-orange-500/10 px-3 py-1.5 rounded-full border border-orange-500/20 flex items-center gap-1.5 transition-all">
-                        {stats.jobs} / {jobTarget} <Edit2 className="w-3 h-3" />
+                        {stats.jobs} / {jobTarget} Job <Edit2 className="w-3 h-3" />
                       </button>
                     )}
                 </div>
@@ -522,25 +537,19 @@ const App = () => {
         )}
       </main>
 
-      {/* Bottom Navigation */}
-      <footer className={`fixed bottom-0 left-0 right-0 p-5 pb-10 border-t backdrop-blur-3xl flex justify-around items-center z-50 transition-all ${isDarkMode ? 'bg-slate-950/90 border-slate-800/50 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white/95 border-gray-200 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]'}`}>
-            <button onClick={() => setActiveTab('dompet')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'dompet' ? 'text-orange-500 scale-110' : 'text-slate-500 opacity-40'}`}>
-                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'dompet' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
-                  <Wallet className={`w-6 h-6 ${activeTab === 'dompet' ? 'drop-shadow-lg' : ''}`} />
-                </div>
-                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Dompet</span>
+      {/* Optimized Slim Task Bar (Thinner design for mobile as requested) */}
+      <footer className={`fixed bottom-0 left-0 right-0 pt-2 pb-5 px-6 border-t backdrop-blur-3xl flex justify-around items-center z-50 transition-all duration-300 ${isDarkMode ? 'bg-slate-950/90 border-slate-800/40 shadow-[0_-8px_30px_rgba(0,0,0,0.4)]' : 'bg-white/90 border-gray-200/80 shadow-[0_-8px_30px_rgba(0,0,0,0.03)]'}`}>
+            <button onClick={() => setActiveTab('dompet')} className={`flex flex-col items-center gap-0.5 transition-all duration-300 ${activeTab === 'dompet' ? 'text-orange-500 scale-105' : 'text-slate-500/70 hover:text-slate-400'}`}>
+                <Wallet className={`w-5 h-5 ${activeTab === 'dompet' ? 'drop-shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'opacity-60'}`} />
+                <span className="text-[8px] font-bold uppercase tracking-wider">Dompet</span>
             </button>
-            <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'stats' ? 'text-orange-500 scale-110' : 'text-slate-500 opacity-40'}`}>
-                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'stats' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
-                  <Activity className={`w-6 h-6 ${activeTab === 'stats' ? 'drop-shadow-lg' : ''}`} />
-                </div>
-                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Stats</span>
+            <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-0.5 transition-all duration-300 ${activeTab === 'stats' ? 'text-orange-500 scale-105' : 'text-slate-500/70 hover:text-slate-400'}`}>
+                <Activity className={`w-5 h-5 ${activeTab === 'stats' ? 'drop-shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'opacity-60'}`} />
+                <span className="text-[8px] font-bold uppercase tracking-wider">Stats</span>
             </button>
-            <button onClick={() => setActiveTab('misi')} className={`flex flex-col items-center gap-2 transition-all duration-300 ${activeTab === 'misi' ? 'text-orange-600 scale-110' : 'text-slate-500 opacity-40'}`}>
-                <div className={`p-2.5 rounded-2xl transition-all ${activeTab === 'misi' ? 'bg-orange-500/10 shadow-[0_0_15px_rgba(249,115,22,0.2)]' : ''}`}>
-                  <Target className={`w-6 h-6 ${activeTab === 'misi' ? 'drop-shadow-lg' : ''}`} />
-                </div>
-                <span className="text-[9px] font-black uppercase tracking-[0.2em]">Misi</span>
+            <button onClick={() => setActiveTab('misi')} className={`flex flex-col items-center gap-0.5 transition-all duration-300 ${activeTab === 'misi' ? 'text-orange-500 scale-105' : 'text-slate-500/70 hover:text-slate-400'}`}>
+                <Target className={`w-5 h-5 ${activeTab === 'misi' ? 'drop-shadow-[0_0_8px_rgba(249,115,22,0.4)]' : 'opacity-60'}`} />
+                <span className="text-[8px] font-bold uppercase tracking-wider">Misi</span>
             </button>
       </footer>
     </div>
